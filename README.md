@@ -1,4 +1,4 @@
-# TICKETIFY(Train Ticket Reservation System)
+# TICKET-SORT(Train Ticket Reservation System)
 <!-- Youtube video for local setup of similar project: https://www.youtube.com/watch?v=mLFPodZO8Iw -->
 <!-- - Live Url: https://traintickets.herokuapp.com <br>  -->
 <!-- - Login Credentials: admin/admin -->
@@ -99,6 +99,7 @@ This project is about the Train-Ticket-Reservation-System which is used to view 
 
 13. Add Trains By Admin
 <img alt="Admin Home" src="https://github.com/shashirajraja/Train-Ticket-Reservation-System/blob/master/Screenshots/addtrains.png" width="100%">
+
 
 
 

@@ -46,6 +46,24 @@ CREATE TABLE history (
     amount DECIMAL(8,2) NOT NULL
 );
 
+-- Seat Lock Table for temporary seat reservations
+-- Holds seats for 5 minutes during booking process
+-- Prevents double booking by reserving seats before payment
+CREATE TABLE seat_lock (
+    lock_id SERIAL PRIMARY KEY,
+    tr_no INTEGER NOT NULL REFERENCES train(tr_no),
+    mailid VARCHAR(40) NOT NULL REFERENCES customer(mailid),
+    seats_locked INTEGER NOT NULL,
+    lock_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP + INTERVAL '5 minutes'),
+    status VARCHAR(20) DEFAULT 'ACTIVE' -- ACTIVE, EXPIRED, RELEASED
+);
+
+-- Index for quick lock lookups by train and user
+CREATE INDEX idx_seat_lock_train_user ON seat_lock(tr_no, mailid);
+-- Index for cleanup of expired locks
+CREATE INDEX idx_seat_lock_expiry ON seat_lock(expires_at) WHERE status = 'ACTIVE';
+
 -- Insert admin with hashed password (admin -> $2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVEFDa)
 INSERT INTO admin VALUES('admin@demo.com','$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVEFDa','System','Admin','Demo Address 123 colony',9874561230);
 

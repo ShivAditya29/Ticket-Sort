@@ -14,13 +14,16 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import com.shashi.beans.HistoryBean;
+import com.shashi.beans.SeatLockBean;
 import com.shashi.beans.TrainBean;
 import com.shashi.beans.TrainException;
 import com.shashi.constant.ResponseCode;
 import com.shashi.constant.UserRole;
 import com.shashi.service.BookingService;
+import com.shashi.service.SeatLockService;
 import com.shashi.service.TrainService;
 import com.shashi.service.impl.BookingServiceImpl;
+import com.shashi.service.impl.SeatLockServiceImpl;
 import com.shashi.service.impl.TrainServiceImpl;
 import com.shashi.utility.TrainUtil;
 
@@ -30,6 +33,7 @@ public class BookTrains extends HttpServlet {
 
 	private TrainService trainService = new TrainServiceImpl();
 	private BookingService bookingService = new BookingServiceImpl();
+	private SeatLockService seatLockService = new SeatLockServiceImpl();
 
 	public void doPost(HttpServletRequest req, HttpServletResponse res) throws IOException, ServletException {
 		PrintWriter pw = res.getWriter();
@@ -59,54 +63,78 @@ public class BookTrains extends HttpServlet {
 			TrainBean train = trainService.getTrainById(trainNo);
 
 			if (train != null) {
-				// Prepare booking details for transactional booking
-				HistoryBean bookingDetails = new HistoryBean();
-				Double totalAmount = train.getFare() * seat;
-				bookingDetails.setAmount(totalAmount);
-				bookingDetails.setFrom_stn(train.getFrom_stn());
-				bookingDetails.setTo_stn(train.getTo_stn());
-				bookingDetails.setTr_no(trainNo);
-				bookingDetails.setSeats(seat);
-				bookingDetails.setMailId(userMailId);
-				bookingDetails.setDate(date);
-
 				try {
-					// ATOMIC TRANSACTIONAL BOOKING
-					// This uses row-level locking and transaction control to prevent race conditions
-					HistoryBean transaction = bookingService.createTransactionalBooking(trainNo, seat, bookingDetails);
+					// STEP 1: ACQUIRE SEAT LOCK (5-minute temporary reservation)
+					// This prevents other users from booking the same seats during checkout
+					SeatLockBean seatLock = seatLockService.acquireSeatLock(
+						Long.parseLong(trainNo), userMailId, seat);
+					
+					System.out.println("Seat lock acquired: " + seatLock);
+					pw.println("<div class='tab'><p class='menu blue'>⏱ Seats reserved for 5 minutes. Complete booking now.</p></div>");
+					
+					// STEP 2: Prepare booking details for transactional booking
+					HistoryBean bookingDetails = new HistoryBean();
+					Double totalAmount = train.getFare() * seat;
+					bookingDetails.setAmount(totalAmount);
+					bookingDetails.setFrom_stn(train.getFrom_stn());
+					bookingDetails.setTo_stn(train.getTo_stn());
+					bookingDetails.setTr_no(trainNo);
+					bookingDetails.setSeats(seat);
+					bookingDetails.setMailId(userMailId);
+					bookingDetails.setDate(date);
 
-					pw.println("<div class='tab'><p class='menu green'>" + seat
-							+ " Seats Booked Successfully!<br/><br/> Your Transaction Id is: "
-							+ transaction.getTransId() + "</p>" + "</div>");
-					pw.println("<div class='tab'>" + "<p class='menu'>" + "<table>"
-							+ "<tr><td>PNR No: </td><td colspan='3' style='color:blue;'>" + transaction.getTransId()
-							+ "</td></tr><tr><td>Train Name: </td><td>" + train.getTr_name()
-							+ "</td><td>Train No: </td><td>" + transaction.getTr_no()
-							+ "</td></tr><tr><td>Booked From: </td><td>" + transaction.getFrom_stn()
-							+ "</td><td>To Station: </td><td>" + transaction.getTo_stn() + "</td></tr>"
-							+ "<tr><td>Date Of Journey:</td><td>" + transaction.getDate()
-							+ "</td><td>Time(HH:MM):</td><td>11:23</td></tr><tr><td>Passangers: </td><td>"
-							+ transaction.getSeats() + "</td><td>Class: </td><td>" + seatClass + "</td></tr>"
-							+ "<tr><td>Booking Status: </td><td style='color:green;'>CNF/S10/35</td><td>Amount Paid:</td><td>&#8377; "
-							+ transaction.getAmount() + "</td></tr>" + "</table>" + "</p></div>");
+					try {
+						// STEP 3: ATOMIC TRANSACTIONAL BOOKING
+						// This uses row-level locking and transaction control to prevent race conditions
+						// Finality: User seats are decremented and history record is created atomically
+						HistoryBean transaction = bookingService.createTransactionalBooking(trainNo, seat, bookingDetails);
 
-				} catch (TrainException bookingEx) {
-					// Handle booking failures (insufficient seats or DB errors)
-					String errorMsg = bookingEx.getMessage();
-					if (errorMsg.contains("seats available")) {
-						// Extract available seats count from error message
-						int startIdx = errorMsg.indexOf("Only ") + 5;
-						int endIdx = errorMsg.indexOf(" seats");
-						if (startIdx > 5 && endIdx > startIdx) {
-							String availableSeats = errorMsg.substring(startIdx, endIdx);
-							pw.println("<div class='tab'><p1 class='menu red'>Only " + availableSeats
-									+ " Seats are Available in this Train!</p1></div>");
+						// STEP 4: RELEASE SEAT LOCK (booking confirmed)
+						// Lock is converted to permanent booking record
+						seatLockService.releaseSeatLock(seatLock.getLockId());
+						System.out.println("Seat lock released after booking confirmation");
+
+						pw.println("<div class='tab'><p class='menu green'>" + seat
+								+ " Seats Booked Successfully!<br/><br/> Your Transaction Id is: "
+								+ transaction.getTransId() + "</p>" + "</div>");
+						pw.println("<div class='tab'>" + "<p class='menu'>" + "<table>"
+								+ "<tr><td>PNR No: </td><td colspan='3' style='color:blue;'>" + transaction.getTransId()
+								+ "</td></tr><tr><td>Train Name: </td><td>" + train.getTr_name()
+								+ "</td><td>Train No: </td><td>" + transaction.getTr_no()
+								+ "</td></tr><tr><td>Booked From: </td><td>" + transaction.getFrom_stn()
+								+ "</td><td>To Station: </td><td>" + transaction.getTo_stn() + "</td></tr>"
+								+ "<tr><td>Date Of Journey:</td><td>" + transaction.getDate()
+								+ "</td><td>Time(HH:MM):</td><td>11:23</td></tr><tr><td>Passangers: </td><td>"
+								+ transaction.getSeats() + "</td><td>Class: </td><td>" + seatClass + "</td></tr>"
+								+ "<tr><td>Booking Status: </td><td style='color:green;'>CNF/S10/35</td><td>Amount Paid:</td><td>&#8377; "
+								+ transaction.getAmount() + "</td></tr>" + "</table>" + "</p></div>");
+
+					} catch (TrainException bookingEx) {
+						// Booking failed, seat lock will auto-expire in 5 minutes
+						System.err.println("Booking transaction failed: " + bookingEx.getMessage());
+						System.out.println("Seat lock will auto-expire in 5 minutes");
+						
+						// Handle booking failures (insufficient seats or DB errors)
+						String errorMsg = bookingEx.getMessage();
+						if (errorMsg.contains("seats available")) {
+							// Extract available seats count from error message
+							int startIdx = errorMsg.indexOf("Only ") + 5;
+							int endIdx = errorMsg.indexOf(" seats");
+							if (startIdx > 5 && endIdx > startIdx) {
+								String availableSeats = errorMsg.substring(startIdx, endIdx);
+								pw.println("<div class='tab'><p1 class='menu red'>Only " + availableSeats
+										+ " Seats are Available in this Train!</p1></div>");
+							} else {
+								pw.println("<div class='tab'><p1 class='menu red'>Insufficient seats available!</p1></div>");
+							}
 						} else {
-							pw.println("<div class='tab'><p1 class='menu red'>Insufficient seats available!</p1></div>");
+							pw.println("<div class='tab'><p1 class='menu red'>Booking failed: " + errorMsg + "</p1></div>");
 						}
-					} else {
-						pw.println("<div class='tab'><p1 class='menu red'>Booking failed: " + errorMsg + "</p1></div>");
 					}
+					
+				} catch (TrainException lockEx) {
+					// Seat lock acquisition failed (e.g., user has active lock already)
+					pw.println("<div class='tab'><p1 class='menu red'>" + lockEx.getMessage() + "</p1></div>");
 				}
 
 			} else {

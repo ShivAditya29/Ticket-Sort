@@ -59,49 +59,56 @@ public class BookTrains extends HttpServlet {
 			TrainBean train = trainService.getTrainById(trainNo);
 
 			if (train != null) {
-				int avail = train.getSeats();
-				if (seat > avail) {
-					pw.println("<div class='tab'><p1 class='menu red'>Only " + avail
-							+ " Seats are Available in this Train!</p1></div>");
+				// Prepare booking details for transactional booking
+				HistoryBean bookingDetails = new HistoryBean();
+				Double totalAmount = train.getFare() * seat;
+				bookingDetails.setAmount(totalAmount);
+				bookingDetails.setFrom_stn(train.getFrom_stn());
+				bookingDetails.setTo_stn(train.getTo_stn());
+				bookingDetails.setTr_no(trainNo);
+				bookingDetails.setSeats(seat);
+				bookingDetails.setMailId(userMailId);
+				bookingDetails.setDate(date);
 
-				} else if (seat <= avail) {
-					avail = avail - seat;
-					train.setSeats(avail);
-					String responseCode = trainService.updateTrain(train);
-					if (ResponseCode.SUCCESS.toString().equalsIgnoreCase(responseCode)) {
+				try {
+					// ATOMIC TRANSACTIONAL BOOKING
+					// This uses row-level locking and transaction control to prevent race conditions
+					HistoryBean transaction = bookingService.createTransactionalBooking(trainNo, seat, bookingDetails);
 
-						HistoryBean bookingDetails = new HistoryBean();
-						Double totalAmount = train.getFare() * seat;
-						bookingDetails.setAmount(totalAmount);
-						bookingDetails.setFrom_stn(train.getFrom_stn());
-						bookingDetails.setTo_stn(train.getTo_stn());
-						bookingDetails.setTr_no(trainNo);
-						bookingDetails.setSeats(seat);
-						bookingDetails.setMailId(userMailId);
-						bookingDetails.setDate(date);
+					pw.println("<div class='tab'><p class='menu green'>" + seat
+							+ " Seats Booked Successfully!<br/><br/> Your Transaction Id is: "
+							+ transaction.getTransId() + "</p>" + "</div>");
+					pw.println("<div class='tab'>" + "<p class='menu'>" + "<table>"
+							+ "<tr><td>PNR No: </td><td colspan='3' style='color:blue;'>" + transaction.getTransId()
+							+ "</td></tr><tr><td>Train Name: </td><td>" + train.getTr_name()
+							+ "</td><td>Train No: </td><td>" + transaction.getTr_no()
+							+ "</td></tr><tr><td>Booked From: </td><td>" + transaction.getFrom_stn()
+							+ "</td><td>To Station: </td><td>" + transaction.getTo_stn() + "</td></tr>"
+							+ "<tr><td>Date Of Journey:</td><td>" + transaction.getDate()
+							+ "</td><td>Time(HH:MM):</td><td>11:23</td></tr><tr><td>Passangers: </td><td>"
+							+ transaction.getSeats() + "</td><td>Class: </td><td>" + seatClass + "</td></tr>"
+							+ "<tr><td>Booking Status: </td><td style='color:green;'>CNF/S10/35</td><td>Amount Paid:</td><td>&#8377; "
+							+ transaction.getAmount() + "</td></tr>" + "</table>" + "</p></div>");
 
-						HistoryBean transaction = bookingService.createHistory(bookingDetails);
-						pw.println("<div class='tab'><p class='menu green'>" + seat
-								+ " Seats Booked Successfully!<br/><br/> Your Transaction Id is: "
-								+ transaction.getTransId() + "</p>" + "</div>");
-						pw.println("<div class='tab'>" + "<p class='menu'>" + "<table>"
-								+ "<tr><td>PNR No: </td><td colspan='3' style='color:blue;'>" + transaction.getTransId()
-								+ "</td></tr><tr><td>Train Name: </td><td>" + train.getTr_name()
-								+ "</td><td>Train No: </td><td>" + transaction.getTr_no()
-								+ "</td></tr><tr><td>Booked From: </td><td>" + transaction.getFrom_stn()
-								+ "</td><td>To Station: </td><td>" + transaction.getTo_stn() + "</td></tr>"
-								+ "<tr><td>Date Of Journey:</td><td>" + transaction.getDate()
-								+ "</td><td>Time(HH:MM):</td><td>11:23</td></tr><tr><td>Passangers: </td><td>"
-								+ transaction.getSeats() + "</td><td>Class: </td><td>" + seatClass + "</td></tr>"
-								+ "<tr><td>Booking Status: </td><td style='color:green;'>CNF/S10/35</td><td>Amount Paid:</td><td>&#8377; "
-								+ transaction.getAmount() + "</td></tr>" + "</table>" + "</p></div>");
-
+				} catch (TrainException bookingEx) {
+					// Handle booking failures (insufficient seats or DB errors)
+					String errorMsg = bookingEx.getMessage();
+					if (errorMsg.contains("seats available")) {
+						// Extract available seats count from error message
+						int startIdx = errorMsg.indexOf("Only ") + 5;
+						int endIdx = errorMsg.indexOf(" seats");
+						if (startIdx > 5 && endIdx > startIdx) {
+							String availableSeats = errorMsg.substring(startIdx, endIdx);
+							pw.println("<div class='tab'><p1 class='menu red'>Only " + availableSeats
+									+ " Seats are Available in this Train!</p1></div>");
+						} else {
+							pw.println("<div class='tab'><p1 class='menu red'>Insufficient seats available!</p1></div>");
+						}
 					} else {
-						pw.println(
-								"<div class='tab'><p1 class='menu red'>Transaction Declined. Try Again !</p1></div>");
-
+						pw.println("<div class='tab'><p1 class='menu red'>Booking failed: " + errorMsg + "</p1></div>");
 					}
 				}
+
 			} else {
 				pw.println("<div class='tab'><p1 class='menu'>Invalid Train Number !</p1></div>");
 
